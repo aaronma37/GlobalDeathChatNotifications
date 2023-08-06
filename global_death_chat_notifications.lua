@@ -143,9 +143,8 @@ local function notify(_player_data, _checksum, num_peer_checks, in_guild, force)
 			.. ("%02X"):format(tonumber(global_death_chat_notifications_settings["last_words_color"]["g"] * 255))
 			.. ("%02X"):format(tonumber(global_death_chat_notifications_settings["last_words_color"]["b"] * 255))
 		last_words_msg = global_death_chat_notifications_settings["last_words_template"]
-		-- last_words_msg =
-		-- 	last_words_msg:gsub("%<last_words>", "|cFF" .. hex .. '"' .. _player_data["last_words"] .. '"|r')
-		last_words_msg = last_words_msg:gsub("%<last_words>", "|cFF" .. hex .. '"' .. "AA" .. '"|r')
+		last_words_msg =
+			last_words_msg:gsub("%<last_words>", "|cFF" .. hex .. '"' .. _player_data["last_words"] .. '"|r')
 		msg = msg .. last_words_msg
 	end
 	msg = msg .. "|r"
