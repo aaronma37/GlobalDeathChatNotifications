@@ -24,10 +24,13 @@ local COMM_COMMANDS = {
 	["BROADCAST_DEATH_PING"] = "1",
 	["BROADCAST_DEATH_PING_CHECKSUM"] = "2",
 	["LAST_WORDS"] = "3",
+	["GUILD_DEATH_NOTIFICATION"] = "4",
 }
 local COMM_COMMAND_DELIM = "$"
 local COMM_FIELD_DELIM = "~"
 local HC_DEATH_LOG_MAX = 100000
+
+local _, _, _, tocversion = GetBuildInfo()
 
 local death_alerts_channel = "hcdeathalertschannel"
 local death_alerts_channel_pw = "hcdeathalertschannelpw"
@@ -38,6 +41,64 @@ local last_attack_source = nil
 local recent_msg = ""
 local entry_cache = {}
 local entry_cache_secure = {}
+
+local _class_tbl = {
+	["Warrior"] = 1,
+	["Paladin"] = 2,
+	["Hunter"] = 3,
+	["Rogue"] = 4,
+	["Priest"] = 5,
+	["Shaman"] = 7,
+	["Mage"] = 8,
+	["Warlock"] = 9,
+	["Druid"] = 11,
+}
+
+local _zone_tbl = {
+	["Azeroth"] = 947,
+	["Durotar"] = 1411,
+	["Mulgore"] = 1412,
+	["The Barrens"] = 1413,
+	["Kalimdor"] = 1414,
+	["Eastern Kingdoms"] = 1415,
+	["Alterac Mountains"] = 1416,
+	["Arathi Highlands"] = 1417,
+	["Badlands"] = 1418,
+	["Blasted Lands"] = 1419,
+	["Tirisfal Glades"] = 1420,
+	["Silverpine Forest"] = 1421,
+	["Western Plaguelands"] = 1422,
+	["Eastern Plaguelands"] = 1423,
+	["Hillsbrad Foothills"] = 1424,
+	["The Hinterlands"] = 1425,
+	["Dun Morogh"] = 1426,
+	["Searing Gorge"] = 1427,
+	["Burning Steppes"] = 1428,
+	["Elwynn Forest"] = 1429,
+	["Deadwind Pass"] = 1430,
+	["Duskwood"] = 1431,
+	["Loch Modan"] = 1432,
+	["Redridge Mountains"] = 1433,
+	["Stranglethorn Vale"] = 1434,
+	["Swamp of Sorrows"] = 1435,
+	["Westfall"] = 1436,
+	["Wetlands"] = 1437,
+	["Teldrassil"] = 1438,
+	["Darkshore"] = 1439,
+	["Ashenvale"] = 1440,
+	["Thousand Needles"] = 1441,
+	["Stonetalon Mountains"] = 1442,
+	["Desolace"] = 1443,
+	["Feralas"] = 1444,
+	["Dustwallow Marsh"] = 1445,
+	["Tanaris"] = 1446,
+	["Azshara"] = 1447,
+	["Felwood"] = 1448,
+	["Un'Goro Crater"] = 1449,
+	["Moonglade"] = 1450,
+	["Silithus"] = 1451,
+	["Winterspring"] = 1452,
+}
 
 local environment_damage = {
 	[-2] = "Drowning",
@@ -133,6 +194,26 @@ local function isValidEntry(_player_data)
 	return true
 end
 
+local function lesserIsValidEntry(_player_data)
+	if _player_data == nil then
+		return false
+	end
+	if _player_data["source_id"] == nil then
+		return false
+	end
+	if
+		_player_data["class_id"] == nil
+		or tonumber(_player_data["class_id"]) == nil
+		or GetClassInfo(_player_data["class_id"]) == nil
+	then
+		return false
+	end
+	if _player_data["level"] == nil or _player_data["level"] < 0 or _player_data["level"] > 80 then
+		return false
+	end
+	return true
+end
+
 local function encodeMessage(name, guild, source_id, race_id, class_id, level, instance_id, map_id, map_pos)
 	if name == nil then
 		return
@@ -172,6 +253,40 @@ local function encodeMessage(name, guild, source_id, race_id, class_id, level, i
 	return comm_message
 end
 
+local function lesserEncodeMessage(name, guild, source_id, race_id, class_id, level, instance_id, map_id, map_pos)
+	if name == nil then
+		return
+	end
+	if tonumber(source_id) == nil then
+		return
+	end
+	if tonumber(level) == nil then
+		return
+	end
+
+	local loc_str = ""
+	local map_pos = nil
+	local comm_message = name
+		.. COMM_FIELD_DELIM
+		.. (guild or "")
+		.. COMM_FIELD_DELIM
+		.. source_id
+		.. COMM_FIELD_DELIM
+		.. (race_id or "")
+		.. COMM_FIELD_DELIM
+		.. class_id
+		.. COMM_FIELD_DELIM
+		.. level
+		.. COMM_FIELD_DELIM
+		.. (instance_id or "")
+		.. COMM_FIELD_DELIM
+		.. (map_id or "")
+		.. COMM_FIELD_DELIM
+		.. loc_str
+		.. COMM_FIELD_DELIM
+	return comm_message
+end
+
 local function decodeMessage(msg)
 	local values = {}
 	for w in msg:gmatch("(.-)~") do
@@ -195,10 +310,22 @@ end
 
 -- [checksum -> {name, guild, source, race, class, level, F's, location, last_words, location}]
 local death_ping_lru_cache_tbl = {}
+local death_ping_guild_notification_cache_ = {}
 local death_ping_lru_cache_ll = {}
 local broadcast_death_ping_queue = {}
 local death_alert_out_queue = {}
+local death_alert_out_queue_guild_notification = {}
 local last_words_queue = {}
+
+local function fletcher16Raw(data)
+	local sum1 = 0
+	local sum2 = 0
+	for index = 1, #data do
+		sum1 = (sum1 + string.byte(string.sub(data, index, index))) % 255
+		sum2 = (sum2 + sum1) % 255
+	end
+	return bit.bor(bit.lshift(sum2, 8), sum1)
+end
 
 local function fletcher16(_player_data)
 	local data = _player_data["name"] .. _player_data["guild"] .. _player_data["level"]
@@ -267,6 +394,33 @@ local function shouldCreateEntry(checksum)
 		return false
 	end
 	entry_cache[checksum] = 1
+	return true
+end
+
+local function shouldCreateEntryGuildNotification(checksum)
+	if death_ping_guild_notification_cache_[checksum] == nil then
+		return false
+	end
+	if death_ping_guild_notification_cache_[checksum]["player_data"] == nil then
+		return false
+	end
+	if lesserIsValidEntry(death_ping_guild_notification_cache_[checksum]["player_data"]) == false then
+		return false
+	end
+	if entry_cache[checksum] then
+		return false
+	end
+	if
+		death_ping_guild_notification_cache_[checksum]["num_reported"] == nil
+		or death_ping_guild_notification_cache_[checksum]["num_reported"] < 2
+	then
+		return false
+	end
+	entry_cache[checksum] = 1
+	if death_ping_lru_cache_tbl[checksum] == nil then
+		death_ping_lru_cache_tbl[checksum] = {}
+	end
+	death_ping_lru_cache_tbl[checksum]["player_data"] = death_ping_guild_notification_cache_[checksum]["player_data"]
 	return true
 end
 
@@ -359,6 +513,22 @@ local function selfDeathAlert(death_source_str)
 	table.insert(death_alert_out_queue, msg)
 end
 
+local function signalGuildDeath(_name, _class_str, _level, _zone, _race, _source)
+	local guildName, guildRankName, guildRankIndex = GetGuildInfo("player")
+	local msg = lesserEncodeMessage(
+		_name,
+		guildName,
+		npc_to_id[_source],
+		nil,
+		_class_tbl[_class_str],
+		_level,
+		nil,
+		_zone_tbl[_zone],
+		nil
+	)
+	table.insert(death_alert_out_queue_guild_notification, msg)
+end
+
 -- Receive a guild message. Need to send ack
 local function deathlogReceiveLastWords(sender, data)
 	if data == nil then
@@ -429,7 +599,7 @@ local function deathlogReceiveGuildMessage(sender, data)
 	death_ping_lru_cache_tbl[checksum]["self_report"] = 1
 	death_ping_lru_cache_tbl[checksum]["in_guild"] = 1
 	table.insert(broadcast_death_ping_queue, checksum) -- Must be added to queue to be broadcasted to network
-	local delay = 5.0 -- seconds; wait for last words
+	local delay = 3.5 -- seconds; wait for last words
 	C_Timer.After(delay, function()
 		if shouldCreateEntry(checksum) then
 			createEntry(checksum)
@@ -465,7 +635,7 @@ local function deathlogReceiveChannelMessageChecksum(sender, checksum)
 	end
 
 	death_ping_lru_cache_tbl[checksum]["peer_report"] = death_ping_lru_cache_tbl[checksum]["peer_report"] + 1
-	local delay = 5.0 -- seconds; wait for last words
+	local delay = 3.5 -- seconds; wait for last words
 	C_Timer.After(delay, function()
 		if shouldCreateEntry(checksum) then
 			createEntry(checksum)
@@ -533,6 +703,53 @@ local function deathlogReceiveChannelMessage(sender, data)
 	end)
 end
 
+local function deathlogReceiveGuildDeathNotification(sender, data, doublechecksum)
+	if data == nil then
+		return
+	end
+	local decoded_player_data = decodeMessage(data)
+	-- if sender ~= decoded_player_data["name"] then -- expected to be different
+	-- 	return
+	-- end
+	if lesserIsValidEntry(decoded_player_data) == false then
+		return
+	end
+
+	local checksum = fletcher16(decoded_player_data)
+
+	if tonumber(fletcher16Raw(sender .. data)) ~= tonumber(doublechecksum) then
+		return
+	end
+
+	if death_ping_guild_notification_cache_[checksum] == nil then
+		death_ping_guild_notification_cache_[checksum] = {}
+	end
+
+	if death_ping_guild_notification_cache_[checksum]["player_data"] == nil then
+		death_ping_guild_notification_cache_[checksum]["player_data"] = decoded_player_data
+	end
+
+	if death_ping_guild_notification_cache_[checksum]["committed"] then
+		return
+	end
+
+	if death_ping_guild_notification_cache_[checksum]["num_reported"] == nil then
+		death_ping_guild_notification_cache_[checksum]["num_reported"] = 0
+	end
+	death_ping_guild_notification_cache_[checksum]["num_reported"] = death_ping_guild_notification_cache_[checksum]["num_reported"]
+		+ 1
+
+	local delay = 6.0 -- seconds; wait for last words
+	C_Timer.After(delay, function()
+		if shouldCreateEntryGuildNotification(checksum) then
+			createEntry(checksum)
+		end
+		if shouldCreateEntrySecure(checksum) then
+			createEntrySecure(checksum)
+		end
+	end)
+end
+
 local function deathlogJoinChannel()
 	JoinChannelByName(death_alerts_channel, death_alerts_channel_pw)
 	local channel_num = GetChannelName(death_alerts_channel)
@@ -583,6 +800,22 @@ local function sendNextInQueue()
 		table.remove(last_words_queue, 1)
 		return
 	end
+
+	if #death_alert_out_queue_guild_notification > 0 then
+		local channel_num = GetChannelName(death_alerts_channel)
+		if channel_num == 0 then
+			deathlogJoinChannel()
+			return
+		end
+		local commMessage = COMM_COMMANDS["GUILD_DEATH_NOTIFICATION"]
+			.. COMM_COMMAND_DELIM
+			.. death_alert_out_queue_guild_notification[1]
+			.. COMM_COMMAND_DELIM
+			.. fletcher16Raw(UnitName("player") .. death_alert_out_queue_guild_notification[1])
+		CTL:SendChatMessage("BULK", COMM_NAME, commMessage, "CHANNEL", nil, channel_num)
+		table.remove(death_alert_out_queue_guild_notification, 1)
+		return
+	end
 end
 
 -- Note: We can only send at most 1 message per click, otherwise we get a taint
@@ -603,6 +836,9 @@ death_notification_lib_event_handler:RegisterEvent("CHAT_MSG_SAY")
 death_notification_lib_event_handler:RegisterEvent("CHAT_MSG_GUILD")
 death_notification_lib_event_handler:RegisterEvent("CHAT_MSG_PARTY")
 death_notification_lib_event_handler:RegisterEvent("PLAYER_ENTERING_WORLD")
+if tocversion >= 11404 then
+	death_notification_lib_event_handler:RegisterEvent("CHAT_MSG_GUILD_DEATHS")
+end
 
 local function handleEvent(self, event, ...)
 	local arg = { ... }
@@ -611,7 +847,7 @@ local function handleEvent(self, event, ...)
 		if channel_name ~= death_alerts_channel then
 			return
 		end
-		local command, msg = string.split(COMM_COMMAND_DELIM, arg[1])
+		local command, msg, _doublechecksum = string.split(COMM_COMMAND_DELIM, arg[1])
 		if command == COMM_COMMANDS["BROADCAST_DEATH_PING_CHECKSUM"] then
 			local player_name_short, _ = string.split("-", arg[2])
 			if shadowbanned[player_name_short] then
@@ -674,6 +910,27 @@ local function handleEvent(self, event, ...)
 			end
 			return
 		end
+
+		if command == COMM_COMMANDS["GUILD_DEATH_NOTIFICATION"] then
+			local player_name_short, _ = string.split("-", arg[2])
+			if shadowbanned[player_name_short] then
+				return
+			end
+
+			if throttle_player[player_name_short] == nil then
+				throttle_player[player_name_short] = 0
+			end
+			throttle_player[player_name_short] = throttle_player[player_name_short] + 1
+			if throttle_player[player_name_short] > 1000 then
+				shadowbanned[player_name_short] = 1
+			end
+
+			deathlogReceiveGuildDeathNotification(player_name_short, msg, _doublechecksum)
+			if debug then
+				print("death ping", msg)
+			end
+			return
+		end
 	elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
 		-- local time, token, hidding, source_serial, source_name, caster_flags, caster_flags2, target_serial, target_name, target_flags, target_flags2, ability_id, ability_name, ability_type, extraSpellID, extraSpellName, extraSchool = CombatLogGetCurrentEventInfo()
 		local _, ev, _, _, source_name, _, _, target_guid, _, _, _, environmental_type, _, _, _, _, _ =
@@ -712,6 +969,21 @@ local function handleEvent(self, event, ...)
 		if senderGUID == UnitGUID("player") and automated_text_found == nil then
 			recent_msg = text
 		end
+	elseif event == "CHAT_MSG_GUILD_DEATHS" then
+		local _text = arg[1]
+		local _, _b = string.split("[", _text)
+		local _name, _ = string.split("]", _b)
+		local _, _npc = string.split(":", _text)
+		local _npc, _ = string.split(".", _npc)
+		local _, _npc = strsplit(" ", _npc, 2)
+
+		for i = 1, GetNumGuildMembers() do
+			local name, _, _, level, class_str, zone, _, _, _, _, class_id = GetGuildRosterInfo(i)
+			local player_name_short, _ = string.split("-", name)
+			if player_name_short == _name then
+				signalGuildDeath(_name, class_str, level, zone, nil, _npc)
+			end
+		end
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		C_Timer.After(5.0, function()
 			deathlogJoinChannel()
@@ -720,3 +992,6 @@ local function handleEvent(self, event, ...)
 end
 
 death_notification_lib_event_handler:SetScript("OnEvent", handleEvent)
+
+-- local sample_bliz_notification = "[Yazzpad] has died at level 1 while in Coldridge Valley, slain by: Small Crag Boar."
+-- handleEvent(nil, "CHAT_MSG_GUILD_DEATHS", sample_bliz_notification)

@@ -93,12 +93,14 @@ local function notify(_player_data, _checksum, num_peer_checks, in_guild, force)
 		end
 	else
 	end
-
-	local race = C_CreatureInfo.GetRaceInfo(_player_data["race_id"])
-	if race then
-		race = race.raceName
-	else
-		race = ""
+	local race = ""
+	if _player_data["race_id"] then
+		race = C_CreatureInfo.GetRaceInfo(_player_data["race_id"])
+		if race then
+			race = race.raceName
+		else
+			race = ""
+		end
 	end
 
 	local class = GetClassInfo(_player_data["class_id"]) or ""
@@ -134,19 +136,19 @@ local function notify(_player_data, _checksum, num_peer_checks, in_guild, force)
 	msg = msg:gsub("%<level>", _player_data["level"])
 	msg = msg:gsub("%<zone>", zone)
 
-	if _player_data["last_words"] then
+	if _player_data["last_words"] ~= nil then
 		local last_words_msg
 
 		local hex = ("%02X"):format(tonumber(global_death_chat_notifications_settings["last_words_color"]["r"] * 255))
 			.. ("%02X"):format(tonumber(global_death_chat_notifications_settings["last_words_color"]["g"] * 255))
 			.. ("%02X"):format(tonumber(global_death_chat_notifications_settings["last_words_color"]["b"] * 255))
 		last_words_msg = global_death_chat_notifications_settings["last_words_template"]
-		last_words_msg =
-			last_words_msg:gsub("%<last_words>", "|cFF" .. hex .. '"' .. _player_data["last_words"] .. '"|r')
+		-- last_words_msg =
+		-- 	last_words_msg:gsub("%<last_words>", "|cFF" .. hex .. '"' .. _player_data["last_words"] .. '"|r')
+		last_words_msg = last_words_msg:gsub("%<last_words>", "|cFF" .. hex .. '"' .. "AA" .. '"|r')
 		msg = msg .. last_words_msg
 	end
 	msg = msg .. "|r"
-
 	print(msg)
 end
 
@@ -154,11 +156,11 @@ local defaults = {
 	["show_guild_deaths"] = true,
 	["show_zone_deaths"] = true,
 	["show_all_deaths"] = true,
-	["accent_color"] = { ["r"] = 1, ["g"] = 1, ["b"] = 0, ["a"] = 1 },
+	["accent_color"] = { ["r"] = 1, ["g"] = 0.2, ["b"] = 0.2, ["a"] = 1 },
 	["last_words_color"] = { ["r"] = 0.8, ["g"] = 0.8, ["b"] = 0.8, ["a"] = 1 },
-	["message_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the <level> <race> <class> has been slain by <source> in <zone>.",
-	["fallen_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the <level> <race> <class> drowned in <zone>.",
-	["drowned_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the <level> <race> <class> fell to their death in <zone>.",
+	["message_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the lvl <level> <race> <class> has been slain by <source> in <zone>.",
+	["fallen_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the lvl <level> <race> <class> drowned in <zone>.",
+	["drowned_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the lvl <level> <race> <class> fell to their death in <zone>.",
 	["last_words_template"] = "Their last words were <last_words>.",
 }
 
