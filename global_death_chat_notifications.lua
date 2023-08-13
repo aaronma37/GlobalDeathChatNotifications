@@ -80,6 +80,17 @@ local function notify(_player_data, _checksum, num_peer_checks, in_guild, force)
 		end
 	end
 
+	if
+		global_death_chat_notifications_settings["show_friends_deaths"]
+		and C_FriendList.GetFriendInfo(_player_data["name"])
+	then
+		should_show = true
+	end
+
+	if _player_data["level"] and _player_data["level"] < (global_death_chat_notifications_settings["min_lvl"] or 1) then
+		should_show = false
+	end
+
 	if should_show == false then
 		return
 	end
@@ -153,8 +164,10 @@ end
 
 local defaults = {
 	["show_guild_deaths"] = true,
+	["show_friends_deaths"] = true,
 	["show_zone_deaths"] = true,
 	["show_all_deaths"] = true,
+	["min_lvl"] = 1,
 	["accent_color"] = { ["r"] = 1, ["g"] = 0.2, ["b"] = 0.2, ["a"] = 1 },
 	["last_words_color"] = { ["r"] = 0.8, ["g"] = 0.8, ["b"] = 0.8, ["a"] = 1 },
 	["message_template"] = "|TInterface\\WorldStateFrame\\SkullBones:18:18:0:0:64:64:0:32:0:32|t<name> the lvl <level> <race> <class> has been slain by <source> in <zone>.",
@@ -205,6 +218,19 @@ local options = {
 					set = function()
 						global_death_chat_notifications_settings["show_guild_deaths"] =
 							not global_death_chat_notifications_settings["show_guild_deaths"]
+					end,
+				},
+				show_friends_deaths_toggle = {
+					type = "toggle",
+					name = "Show Friends Deaths",
+					desc = "Select to show friends deaths in chat.",
+					width = 1.3,
+					get = function()
+						return global_death_chat_notifications_settings["show_friends_deaths"]
+					end,
+					set = function()
+						global_death_chat_notifications_settings["show_friends_deaths"] =
+							not global_death_chat_notifications_settings["show_friends_deaths"]
 					end,
 				},
 				show_in_zone_deaths_toggle = {
@@ -276,6 +302,21 @@ local options = {
 				global_death_chat_notifications_settings["last_words_color"]["g"] = g
 				global_death_chat_notifications_settings["last_words_color"]["b"] = b
 				global_death_chat_notifications_settings["last_words_color"]["a"] = a
+			end,
+		},
+		min_lvl = {
+			type = "range",
+			name = "Min. Lvl. to Display",
+			desc = "Minimum level to display",
+			min = 1,
+			max = 60,
+			step = 1,
+			order = 20,
+			get = function()
+				return global_death_chat_notifications_settings["min_lvl"]
+			end,
+			set = function(self, value)
+				global_death_chat_notifications_settings["min_lvl"] = value
 			end,
 		},
 		custom_chat_header = {
